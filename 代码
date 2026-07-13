@@ -1,0 +1,170 @@
+# -*- coding: utf-8 -*-
+"""
+创新杯数据分析模板 v1.0
+使用说明：替换【】部分即可
+"""
+
+import pandas as pd
+import numpy as np
+import scipy.stats as stats
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import r2_score, mean_squared_error, accuracy_score
+import xgboost as xgb  # 新增
+import shap
+import matplotlib.pyplot as plt
+
+# ========== 0. 配置 ==========
+plt.rcParams['font.sans-serif'] = ['SimHei']
+plt.rcParams['axes.unicode_minus'] = False
+
+# ========== 1. 数据读取（相对路径） ==========
+# 【替换：文件名】
+df = pd.read_csv('data/【你的数据.csv】')
+print(f"数据读取成功，行数:{len(df)}")
+
+# ========== 2. 快速查看 ==========
+print(df.head())
+print(df.info())
+print(df.describe())
+
+# ========== 3. 数据清洗（【替换：你的列名】） ==========
+# 缺失值处理
+df['【目标变量】'] = df['【目标变量】'].fillna(df['【目标变量】'].median())
+
+# 异常值：用IQR法
+Q1 = df['【目标变量】'].quantile(0.25)
+Q3 = df['【目标变量】'].quantile(0.75)
+IQR = Q3 - Q1
+df = df[(df['【目标变量】'] >= Q1-1.5*IQR) & (df['【目标变量】'] <= Q3+1.5*IQR)]
+
+# ========== 4. 特征工程 ==========
+# 【替换：你的特征】
+feature_cols = ['【特征1】', '【特征2】', '【特征3】']
+X = df[feature_cols]
+y = df['【目标变量】']
+
+# 分类变量编码
+X = pd.get_dummies(X, columns=['【分类特征】'], drop_first=True)
+
+# ========== 5. 数据划分 ==========
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.3, random_state=42
+)
+
+# ========== 6. 模型对比（递进结构） ==========
+
+# 模型1：线性回归（基准）
+print("="*50)
+print("模型1：线性回归")
+print("="*50)
+X_train_const = sm.add_constant(X_train)
+model_lm = sm.OLS(y_train, X_train_const).fit(cov_type='HC3')
+print(model_lm.summary())
+
+# 模型2：随机森林（非线性）
+print("\n" + "="*50)
+print("模型2：随机森林")
+print("="*50)
+rf = RandomForestRegressor(n_estimators=300, random_state=42)
+rf.fit(X_train, y_train)
+y_pred_rf = rf.predict(X_test)
+print(f"R²: {r2_score(y_test, y_pred_rf):.4f}")
+print(f"RMSE: {np.sqrt(mean_squared_error(y_test, y_pred_rf)):.4f}")
+
+# 模型3：XGBoost（新增，精度更高）
+print("\n" + "="*50)
+print("模型3：XGBoost")
+print("="*50)
+xgb_model = xgb.XGBRegressor(
+    n_estimators=100,
+    max_depth=5,
+    learning_rate=0.1,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    random_state=42
+)
+xgb_model.fit(X_train, y_train)
+y_pred_xgb = xgb_model.predict(X_test)
+print(f"R²: {r2_score(y_test, y_pred_xgb):.4f}")
+print(f"RMSE: {np.sqrt(mean_squared_error(y_test, y_pred_xgb)):.4f}")
+
+# 交叉验证对比
+print("\n" + "="*50)
+print("交叉验证对比（5折）")
+print("="*50)
+lm_cv = cross_val_score(model_lm, X_train_const, y_train, cv=5, scoring='r2')
+rf_cv = cross_val_score(rf, X_train, y_train, cv=5, scoring='r2')
+xgb_cv = cross_val_score(xgb_model, X_train, y_train, cv=5, scoring='r2')
+print(f"线性回归: {lm_cv.mean():.4f} (+/- {lm_cv.std():.4f})")
+print(f"随机森林: {rf_cv.mean():.4f} (+/- {rf_cv.std():.4f})")
+print(f"XGBoost:  {xgb_cv.mean():.4f} (+/- {xgb_cv.std():.4f})")
+
+# ========== 7. SHAP解释（XGBoost） ==========
+print("\n" + "="*50)
+print("SHAP解释性分析")
+print("="*50)
+explainer = shap.TreeExplainer(xgb_model)
+shap_values = explainer.shap_values(X_test.iloc[:100])
+
+# 全局解释
+shap.summary_plot(shap_values, X_test.iloc[:100], show=False)
+plt.tight_layout()
+plt.savefig('output/SHAP_summary.png', dpi=300, bbox_inches='tight')
+plt.show()
+
+# 依赖图（最重要的特征）
+mean_abs_shap = np.mean(np.abs(shap_values), axis=0)
+most_important = X_test.columns[np.argmax(mean_abs_shap)]
+shap.dependence_plot(most_important, shap_values, X_test.iloc[:100], show=False)
+plt.savefig(f'output/SHAP_dependence_{most_important}.png', dpi=300)
+plt.show()
+
+# ========== 8. 模型诊断 ==========
+residuals = y_test - y_pred_xgb
+fitted = y_pred_xgb
+
+plt.figure(figsize=(12, 4))
+plt.subplot(1, 2, 1)
+plt.scatter(fitted, residuals, alpha=0.5)
+plt.axhline(y=0, color='r', linestyle='--')
+plt.xlabel('拟合值')
+plt.ylabel('残差')
+plt.title('残差图')
+
+plt.subplot(1, 2, 2)
+stats.probplot(residuals, dist="norm", plot=plt)
+plt.title('Q-Q图')
+
+plt.tight_layout()
+plt.savefig('output/模型诊断图.png', dpi=300)
+plt.show()
+
+# ========== 9. 结果输出 ==========
+# 模型对比表
+results = pd.DataFrame({
+    '模型': ['线性回归', '随机森林', 'XGBoost'],
+    'R²': [
+        r2_score(y_test, model_lm.predict(sm.add_constant(X_test))),
+        r2_score(y_test, y_pred_rf),
+        r2_score(y_test, y_pred_xgb)
+    ],
+    'RMSE': [
+        np.sqrt(mean_squared_error(y_test, model_lm.predict(sm.add_constant(X_test)))),
+        np.sqrt(mean_squared_error(y_test, y_pred_rf)),
+        np.sqrt(mean_squared_error(y_test, y_pred_xgb))
+    ]
+})
+results.to_csv('output/模型对比结果.csv', index=False, encoding='utf-8-sig')
+print("\n结果已保存到 output/ 文件夹")
+
+# ========== 10. 生成提交CSV ==========
+# 【替换：提交格式】
+submission = pd.DataFrame({
+    'ID': range(len(y_pred_xgb)),
+    '预测值': y_pred_xgb
+})
+submission.to_csv('output/submission.csv', index=False, encoding='utf-8-sig')
+print("提交文件已生成")
