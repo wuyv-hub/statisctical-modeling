@@ -1,1 +1,1 @@
-# statisctical-modeling
+# 学习到的东西
